@@ -22,10 +22,26 @@ before rejoining, because it missed writes and deletes while it was away.
 import threading
 
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from dcache.hash_ring import HashRing
 
 NODE_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
+
+
+def node_client(host="localhost", port=6379, timeout=0.5, **kwargs):
+    """
+    A Redis client suitable for a cache node.
+
+    redis-py retries failed commands itself (redis-py 8: 10 retries with
+    exponential backoff, about 3.6 s against a dead node). This cache
+    already fails over to another replica, so retrying inside the client
+    only delays failover. Retries are turned off and timeouts kept short.
+    """
+    return redis.Redis(host=host, port=port, decode_responses=True,
+                       socket_timeout=timeout, socket_connect_timeout=timeout,
+                       retry=Retry(NoBackoff(), 0), **kwargs)
 
 
 class CacheUnavailable(Exception):
@@ -34,10 +50,17 @@ class CacheUnavailable(Exception):
 
 class DistributedCache:
     def __init__(self, nodes, replicas=2, vnodes=100, write_quorum=1,
-                 failure_threshold=3, near_cache=None, key_prefix="dc:"):
+                 failure_threshold=3, near_cache=None, key_prefix="dc:",
+                 auto_rebalance=True):
         """
-        nodes: {name: redis client}. Clients should use decode_responses=True.
+        nodes: {name: redis client}. Clients should use decode_responses=True;
+            node_client() builds suitable ones.
         near_cache: optional LRUCache in front of the cluster (see docs).
+        auto_rebalance: whether this client moves data when membership
+            changes (wiping recovered nodes and re-replicating keys). With
+            many application processes, enable it on one of them only: the
+            others just stop routing to dead nodes, instead of every process
+            repeating the same copy work.
         """
         if not 1 <= write_quorum <= replicas:
             raise ValueError("write_quorum must be between 1 and replicas")
@@ -46,6 +69,7 @@ class DistributedCache:
         self.failure_threshold = failure_threshold
         self.near_cache = near_cache
         self.key_prefix = key_prefix
+        self.auto_rebalance = auto_rebalance
         self._clients = dict(nodes)
         self._failures = {name: 0 for name in nodes}
         self._down = set()
@@ -151,7 +175,7 @@ class DistributedCache:
             self._record_success(node)
             if node in self._down:
                 self._mark_up(node)
-        if self._needs_rebalance:
+        if self._needs_rebalance and self.auto_rebalance:
             return self.rebalance()
         return None
 
@@ -263,14 +287,17 @@ class DistributedCache:
         self._needs_rebalance = True
 
     def _mark_up(self, node):
-        client = self._clients[node]
-        try:
-            stale = list(client.scan_iter(match=f"{self.key_prefix}*", count=500))
-            if stale:
-                client.delete(*stale)
-        except NODE_ERRORS:
-            self._record_failure(node)
-            return
+        # Only the rebalancing client wipes the returning node; a late wipe
+        # from another process could delete keys already copied back to it.
+        if self.auto_rebalance:
+            client = self._clients[node]
+            try:
+                stale = list(client.scan_iter(match=f"{self.key_prefix}*", count=500))
+                if stale:
+                    client.delete(*stale)
+            except NODE_ERRORS:
+                self._record_failure(node)
+                return
         with self._lock:
             self._down.discard(node)
             self._failures[node] = 0

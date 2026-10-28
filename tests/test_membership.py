@@ -128,3 +128,18 @@ def test_background_health_checker(cache, fake):
         assert cache.down_nodes == {"n2"}
     finally:
         cache.stop_health_checker()
+
+
+def test_non_rebalancing_client_only_reroutes(fake):
+    worker = DistributedCache(fake.clients, replicas=2, failure_threshold=1, auto_rebalance=False)
+    load(worker)
+    copies_before = sum(len(fake.keys_on(n)) for n in fake.servers)
+    fake.kill("n1")
+    assert worker.check_health() is None        # no data moved
+    assert worker.down_nodes == {"n1"}
+    for k in KEYS:
+        assert worker.get(k) == f"v-{k}"         # still served from replicas
+    fake.revive("n1")
+    worker.check_health()
+    assert "n1" in worker.healthy_nodes
+    assert sum(len(fake.keys_on(n)) for n in fake.servers) == copies_before  # nothing wiped
