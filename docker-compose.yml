@@ -1,0 +1,15 @@
+# Three cache nodes on ports 7001-7003, an alternative to scripts/nodes.sh.
+# Persistence is off: a cache node should restart empty.
+services:
+  n1:
+    image: redis:8
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["7001:6379"]
+  n2:
+    image: redis:8
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["7002:6379"]
+  n3:
+    image: redis:8
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["7003:6379"]
