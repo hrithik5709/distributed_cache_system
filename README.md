@@ -2,8 +2,6 @@
 
 A Python client that turns several independent Redis servers into one fault-tolerant cache. Keys are spread with consistent hashing and replicated to two nodes. When a node dies, reads fail over to a replica within milliseconds, and its data is re-replicated. When nodes are added or removed, only the keys whose owners changed are moved.
 
-> **About this repository.** I originally built this project in 2021–2022 in college: it started as an LRU cache and grew into a distributed cache. The original repository was lost in 2026 when my GitHub account was compromised, so this is a ground-up rebuild of the same design, with real benchmarks and the lessons from them.
-
 ## Features
 
 - **Consistent hashing** with virtual nodes (`dcache/hash_ring.py`). Adding a 4th node to 3 moves 26.8% of keys; modulo hashing would move 74.9%.
