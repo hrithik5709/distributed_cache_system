@@ -1,0 +1,5 @@
+redis>=5.0
+
+# development
+fakeredis>=2.20
+pytest>=7.0
